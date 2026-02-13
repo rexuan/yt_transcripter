@@ -60,6 +60,51 @@ def format_timestamp_txt(seconds: float) -> str:
     return f"{hours:02}:{minutes:02}:{secs:02}"
 
 
+def get_available_transcripts(video_id):
+    try:
+        transcript_list = YouTubeTranscriptApi().list(video_id)
+
+        available = []
+
+        for transcript in transcript_list:
+            available.append({
+                "language": transcript.language,
+                "language_code": transcript.language_code,
+                "is_generated": transcript.is_generated
+            })
+
+        return available
+
+    except Exception as e:
+        print(f"Error listing transcripts: {e}")
+        return []
+
+
+def fetch_smart_transcript(video_id):
+    try:
+        transcript_list = YouTubeTranscriptApi().list(video_id)
+
+        # 1. Try any English variant
+        for transcript in transcript_list:
+            if "en" in transcript.language_code:
+                return transcript.fetch()
+
+        # 2. Try manual subtitles
+        for transcript in transcript_list:
+            if not transcript.is_generated:
+                return transcript.fetch()
+
+        # 3. Fallback to auto-generated
+        for transcript in transcript_list:
+            if transcript.is_generated:
+                return transcript.fetch()
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+    return None
+
+
 # ==========================================================
 # Cleaning Logic
 # ==========================================================
@@ -137,20 +182,32 @@ def main():
 Examples:
 
   Basic:
-    python yt_transcripter.py "URL"
+    python %(prog)s "URL"
 
   Save TXT:
-    python yt_transcripter.py "URL" --save
+    python %(prog)s "URL" --save
 
   Export SRT:
-    python yt_transcripter.py "URL" --format srt --save
+    python %(prog)s "URL" --format srt --save
 
   Language fallback:
-    python yt_transcripter.py "URL" --lang en,ms
+    python %(prog)s "URL" --lang en,ms
 
   Clean mode:
-    python yt_transcripter.py "URL" --save --clean
-"""
+    python %(prog)s "URL" --save --clean
+        
+Arguments (i.e., URL) and optional switches may be specified in any order.
+
+When output cleaned transcript is placed after original transcript which will be end of the file,
+to allow scroll after EOF,
+Methods:
+    1. Unix command to physically append fake blank lines at the bottom before piping into less
+    (python %(prog)s "URL" ;yes ""| head -n 300) | less
+    Where 300 is the number of blank new lines being added, can be modified to any number large enough
+    ?2. less -z-300 
+    where -z option controls the scroll window size
+""",
+    formatter_class=argparse.RawTextHelpFormatter
     )
 
     parser.add_argument("url", help="YouTube video URL")
@@ -195,16 +252,22 @@ Examples:
     except ValueError as e:
         print(e)
         return
+        
+    available = get_available_transcripts(video_id)
+
+    print("Available subtitles:")
+    for t in available:
+        print(f"- {t['language']} ({t['language_code']}) | Auto: {t['is_generated']}")
 
     languages = [lang.strip() for lang in args.lang.split(",")]
-
+    
     print(f"Fetching transcript for video: {video_id}")
-    print(f"Language fallback order: {languages}")
-
-    transcript = fetch_transcript(video_id, languages)
+    #print(f"Language fallback order: {languages}")
+    #transcript = fetch_transcript(video_id, languages)
+    transcript = fetch_smart_transcript(video_id)
 
     if not transcript:
-        print("No transcript available.")
+        print("No subtitles/transcript available.")
         return
 
     if args.format == "txt":
@@ -233,12 +296,12 @@ Examples:
             print(f"Saved cleaned version to: {cleaned_filename}")
 
     else:
-        print("\n===== ORIGINAL TRANSCRIPT =====\n")
-        print(output_text)
-
         if cleaned_text:
             print("\n===== CLEANED TRANSCRIPT =====\n")
             print(cleaned_text)
+            
+        print("\n===== ORIGINAL TRANSCRIPT =====\n")
+        print(output_text)
 
 
 if __name__ == "__main__":
